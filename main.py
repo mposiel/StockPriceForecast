@@ -4,48 +4,44 @@ import numpy as np
 import requests
 import matplotlib.pyplot as plt
 from sklearn.utils import shuffle
+import os
+from dotenv import load_dotenv
 
-# Define your API key and symbol
-# symbol = input("Stock name:")
+# Define API key and symbol
+
+load_dotenv()
 
 symbol = 'IBM'
 function = 'TIME_SERIES_DAILY'
-apikey = 'T83EQT6ZCK3LV1X8'
+apikey = os.getenv("API_KEY")
+
+# Function to fetch data from Alpha Vantage
+def fetch_data(symbol, function, apikey):
+    response = requests.get(
+        f'https://www.alphavantage.co/query?function={function}&symbol={symbol}&outputsize=full&apikey={apikey}'
+    )
+    return response.json()
 
 # Fetch data from Alpha Vantage
-data = requests.get(
-    f'https://www.alphavantage.co/query?function={function}&symbol={symbol}&outputsize=full&apikey={apikey}').json()
+data = fetch_data(symbol, function, apikey)
 
-# store the prices in a daily_prices list
-
+# Extract daily closing prices
 daily_prices = []
 
-data_list = list(data)
-for record in data[data_list[1]]:
-    # print(f'Date: {record} Closing Price: {data[data_list[1]][record]["4. close"]}')
-    daily_prices.append(float(data[data_list[1]][record]["4. close"]))
+for record_date, record_data in data['Time Series (Daily)'].items():
+    daily_prices.append(float(record_data["4. close"]))
 
-# print(daily_prices)
-
-# reverse prices so it starts from the earliest
+# Reverse prices so they start from the earliest
 daily_prices.reverse()
-
 
 # Normalize data for model training
 min_price = min(daily_prices)
 max_price = max(daily_prices)
 
-print(f'max price: {max_price}, min price: {min_price}')
-
-normalized_prices = []
-
-for price in daily_prices:
-    normalized_prices.append((float(price) - min_price) / (max_price - min_price))
-
-# print(normalized_prices)
+normalized_prices = [(price - min_price) / (max_price - min_price) for price in daily_prices]
 
 # Prepare data for training
-window_size = 50  # Adjust this window size as needed
+window_size = 50
 x, y = [], []
 
 for i in range(len(normalized_prices) - window_size):
@@ -60,15 +56,8 @@ split_index = int(len(x) * split_ratio)
 x_train, x_test = x[:split_index], x[split_index:]
 y_train, y_test = y[:split_index], y[split_index:]
 
-
-# shuffle the training data to prevent overfitting
+# Shuffle the training data to prevent overfitting
 x_train, y_train = shuffle(x_train, y_train)
-
-
-print(f'total:{len(x)}')
-print(f'len of train:{len(x_train)}, len of test:{len(x_test)}')
-
-
 
 # Build an LSTM model
 model = tf.keras.models.Sequential()
@@ -83,15 +72,17 @@ model.fit(x_train, y_train, epochs=50, batch_size=32)
 # Save the model
 model.save('IBM_model')
 
+# Load the model
+model = tf.keras.models.load_model('IBM_model')
 
-# Make predictions
+# Make predictions on test data
 predictions = model.predict(x_test)
 
 # Inverse transform predictions and actual values to their original scale
 predictions = [(price * (max_price - min_price)) + min_price for price in predictions]
 y_test = [(price * (max_price - min_price)) + min_price for price in y_test]
 
-# Calculate evaluation metrics without scikit-learn
+# Calculate Mean Squared Error
 squared_errors = [(pred - actual) ** 2 for pred, actual in zip(predictions, y_test)]
 mse = sum(squared_errors) / len(squared_errors)
 print(f"Mean Squared Error: {mse}")
@@ -105,7 +96,31 @@ plt.ylabel('Stock Price')
 plt.legend()
 plt.show()
 
+# Fetch additional data for prediction
+testdata = fetch_data(symbol, function, apikey)
 
+# Extract daily closing prices for the test data
+daily_prices = []
 
+for record_date, record_data in testdata['Time Series (Daily)'].items():
+    daily_prices.append(float(record_data["4. close"]))
 
+# Use the latest 50 data points for prediction
+daily_prices = daily_prices[:50]
 
+# Normalize the new data
+normal = [(price - min_price) / (max_price - min_price) for price in daily_prices]
+
+# Reverse the order
+normal.reverse()
+
+# Convert to numpy array
+xx = np.array([normal[0:window_size]])
+
+# Make predictions for the new data
+prediction = model.predict(xx)
+
+# Inverse transform the prediction to the original scale
+result = [(price * (max_price - min_price)) + min_price for price in prediction]
+
+print(result)
